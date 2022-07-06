@@ -36,6 +36,7 @@ pub fn resolve(
     }
     let mut config = parse(&contents)?;
     _resolve(port, max_memory, &mut config);
+    config.max_memory *= 1024 * 1024;
     Ok(config)
 }
 
@@ -63,6 +64,10 @@ fn _resolve(port: Option<u16>, max_memory: Option<u64>, config: &mut Config) {
 impl Config {
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    pub fn max_memory(&self) -> u64 {
+        self.max_memory
     }
 }
 

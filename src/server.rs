@@ -74,7 +74,7 @@ impl Server {
     pub fn new(config: Config, listener: TcpListener) -> Result<Self> {
         let (shutdown_notifier, _) = broadcast::channel(1);
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
-        let keyspace_manager = Arc::new(keyspace::KeyspaceManager::new());
+        let keyspace_manager = Arc::new(keyspace::KeyspaceManager::new(config.max_memory()));
         info!("Server initialized");
         Ok(Server {
             _config: config,

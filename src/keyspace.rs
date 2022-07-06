@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use dashmap::DashMap;
-use log::debug;
+use libproc::libproc::pid_rusage;
 use parking_lot::Mutex;
 use rand::Rng;
 use std::collections::HashMap;
-use std::hash::Hash;
+use std::process;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
@@ -15,6 +15,7 @@ const MAX_MEMORY_EVICTOR_SAMPLE_SIZE: usize = 3;
 
 #[derive(Debug)]
 pub struct KeyspaceManager {
+    server_max_memory: u64,
     keyspaces: DashMap<String, Keyspace>,
 }
 
@@ -29,6 +30,7 @@ pub struct Db {
     shutdown: Mutex<bool>,
     notifier: Notify,
     evictor: Evictor,
+    server_max_memory: u64,
 }
 
 #[derive(Debug)]
@@ -45,8 +47,9 @@ pub enum Evictor {
 }
 
 impl KeyspaceManager {
-    pub fn new() -> Self {
+    pub fn new(server_max_memory: u64) -> Self {
         KeyspaceManager {
+            server_max_memory,
             keyspaces: DashMap::new(),
         }
     }
@@ -67,7 +70,7 @@ impl KeyspaceManager {
         if self.keyspaces.contains_key(&name) {
             return 0;
         }
-        let keyspace = Keyspace::new(evictor);
+        let keyspace = Keyspace::new(evictor, self.server_max_memory);
         keyspace.start_evictor();
         self.keyspaces.insert(name, keyspace);
         1
@@ -75,9 +78,9 @@ impl KeyspaceManager {
 }
 
 impl Keyspace {
-    pub fn new(evictor: Evictor) -> Self {
+    pub fn new(evictor: Evictor, server_max_memory: u64) -> Self {
         Keyspace {
-            db: Arc::new(Db::new(evictor)),
+            db: Arc::new(Db::new(evictor, server_max_memory)),
         }
     }
 
@@ -123,19 +126,14 @@ impl Value {
     }
 }
 
-impl Default for KeyspaceManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Db {
-    pub fn new(evictor: Evictor) -> Self {
+    pub fn new(evictor: Evictor, server_max_memory: u64) -> Self {
         Db {
             store: Mutex::new(HashMap::new()),
             shutdown: Mutex::new(false),
             notifier: Notify::new(),
             evictor,
+            server_max_memory,
         }
     }
 
@@ -166,28 +164,25 @@ async fn start_background_max_memory_evictor(db: Arc<Db>) {
             _ = db.notifier.notified() => {}
         }
     }
-    debug!("Background evictor shutdown successful")
 }
 
 fn sample_and_evict(db: Arc<Db>) {
     if db.is_shutdown() {
         return;
     }
+    let rss = get_rss();
+    if rss < db.server_max_memory {
+        return;
+    }
     let (mut key_to_delete, mut access_time): (Option<String>, Instant) = (None, Instant::now());
+    let mut handle = db.store.lock();
     // We run the loop until we have enough samples (defined by MAX_MEMORY_EVICTOR_SAMPLE_SIZE)
     // to evict, for random evictor we play a game of odds, we generate a random number
     // and if the number is less than < 0.5 the key is selected for eviction.
     // A scenario can occur where for all the samples none of the random numbers were < 0.5
     // in that case we do nothing, this scenario should only occur for random evictor.
     // For LRU evictor we choose the oldest key out of the sample and delete it.
-    let mut handle = db.store.lock();
-    for (i, entry) in handle.iter().enumerate() {
-        if (i + 1) == std::cmp::min(MAX_MEMORY_EVICTOR_SAMPLE_SIZE, handle.len()) {
-            if let Some(key) = key_to_delete {
-                handle.remove(&key);
-            }
-            break;
-        }
+    for (samples, entry) in handle.iter().enumerate() {
         if db.evictor == Evictor::Random {
             if rand::thread_rng().gen::<f32>() < 0.5 {
                 key_to_delete = Some(entry.0.clone())
@@ -196,5 +191,20 @@ fn sample_and_evict(db: Arc<Db>) {
             access_time = entry.1.last_accessed;
             key_to_delete = Some(entry.0.clone());
         }
+        if (samples + 1) == std::cmp::min(MAX_MEMORY_EVICTOR_SAMPLE_SIZE, handle.len()) {
+            if let Some(key) = key_to_delete {
+                handle.remove(&key);
+            }
+            break;
+        }
     }
+}
+
+fn get_rss() -> u64 {
+    let mut rss = pid_rusage::pidrusage::<pid_rusage::RUsageInfoV2>(process::id() as i32)
+        .map_or(0, |r| r.ri_resident_size);
+    if rss > 0 && cfg!(target_os = "linux") {
+        rss *= 1024
+    }
+    rss
 }
