@@ -1,13 +1,14 @@
 use super::frame;
-use super::keyspace::Evictor;
+use super::keyspace::{Evictor, MAX_MEMORY_SAMPLE_SIZE};
 use super::server::ConnectionHandler;
 use anyhow::{anyhow, Result};
 use atoi::atoi;
 use bytes::Bytes;
+use std::iter;
 use std::{str, vec};
 
 pub struct Parser {
-    iterator: vec::IntoIter<frame::Frame>,
+    iterator: iter::Peekable<vec::IntoIter<frame::Frame>>,
 }
 
 #[derive(Debug)]
@@ -41,13 +42,14 @@ pub struct Del {
 pub struct Create {
     keyspace: String,
     evictor: Evictor,
+    max_memory_sample_size: Option<usize>,
 }
 
 impl Parser {
     pub fn new(frame: frame::Frame) -> Result<Self> {
         match frame {
             frame::Frame::Array(values) => Ok(Parser {
-                iterator: values.into_iter(),
+                iterator: values.into_iter().peekable(),
             }),
             _ => Err(anyhow!("ERRPARSE Failed to parse frame as array")),
         }
@@ -98,7 +100,7 @@ impl Parser {
     }
 
     pub fn consumed(&mut self) -> bool {
-        self.next().is_none()
+        self.iterator.peek().is_none()
     }
 }
 
@@ -236,33 +238,87 @@ impl Set {
 impl Create {
     pub fn parse(parser: &mut Parser) -> Result<Self> {
         if let Some(keyspace) = parser.next_string()? {
-            if let Some(evictor) = parser.next_string()? {
-                if !parser.consumed() {
+            let mut cmd = Create {
+                keyspace,
+                evictor: Evictor::Noop,
+                max_memory_sample_size: None,
+            };
+            let mut tokens = Vec::<String>::with_capacity(6);
+
+            while !parser.consumed() {
+                if tokens.len() > 4 {
                     return Err(anyhow!(
                         "ERRPARSE Invalid command, wrong number of arguments for 'CREATE'"
                     ));
                 }
-                let evictor = match evictor.to_uppercase().as_str() {
-                    "RANDOM" => Evictor::Random,
-                    "NOOP" => Evictor::Noop,
-                    "LRU" => Evictor::Lru,
-                    _ => return Err(anyhow!("ERRPARSE Invalid value {} for 'EVICTOR'", evictor)),
-                };
-                return Ok(Create { keyspace, evictor });
+                if let Some(token) = parser.next_string()? {
+                    tokens.push(token);
+                }
             }
-            return Err(anyhow!(
-                "ERRPARSE Invalid command, missing argument 'EVICTOR'"
-            ));
+
+            if tokens.is_empty() {
+                return Ok(cmd);
+            }
+
+            if tokens.len() % 2 != 0 {
+                return Err(anyhow!(
+                    "ERRPARSE Invalid command, wrong number of arguments for 'CREATE'"
+                ));
+            }
+
+            let mut i = 0;
+            while i < tokens.len() - 1 {
+                let arg = &tokens[i].to_uppercase();
+                let val = &tokens[i + 1].to_uppercase();
+
+                if arg == "EV" {
+                    cmd.evictor = match val.as_str() {
+                        "RANDOM" => Evictor::Random,
+                        "NOOP" => Evictor::Noop,
+                        "LRU" => Evictor::Lru,
+                        _ => return Err(anyhow!("ERRPARSE Invalid value '{}' for 'EVICTOR'", val)),
+                    };
+                } else if arg == "SS" {
+                    let sample_size = match val.parse::<usize>() {
+                        Ok(v) => v,
+                        Err(_) => {
+                            return Err(anyhow!(
+                                "ERRPARSE Invalid value '{}' for 'SAMPLE SIZE'",
+                                val
+                            ))
+                        }
+                    };
+                    cmd.max_memory_sample_size = Some(sample_size);
+                } else {
+                    return Err(anyhow!("ERRPARSE Invalid argument '{}'", arg));
+                }
+                i += 2;
+            }
+
+            if cmd.evictor == Evictor::Noop && cmd.max_memory_sample_size.is_some() {
+                return Err(anyhow!(
+                    "ERRPARSE Invalid command, 'SAMPLE SIZE' not applicable for 'NOOP' evictor"
+                ));
+            } else if cmd.evictor != Evictor::Noop && cmd.max_memory_sample_size.is_none() {
+                cmd.max_memory_sample_size = Some(MAX_MEMORY_SAMPLE_SIZE);
+            }
+
+            return Ok(cmd);
         }
-        return Err(anyhow!(
+        Err(anyhow!(
             "ERRPARSE Invalid command, missing argument 'KEYSPACE'"
-        ));
+        ))
     }
 
     pub async fn exec(self, connection: &mut ConnectionHandler) {
-        let response = connection
-            .keyspace_manager
-            .create(self.keyspace, self.evictor);
+        let mut max_memory_sample_size = 0;
+        if let Some(sample_size) = self.max_memory_sample_size {
+            max_memory_sample_size = sample_size
+        }
+        let response =
+            connection
+                .keyspace_manager
+                .create(self.keyspace, self.evictor, max_memory_sample_size);
         connection
             .connection
             .write_frame(frame::Frame::Integer(response as i64))

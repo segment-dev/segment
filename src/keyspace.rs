@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 use tokio::time::sleep;
 
-const MAX_MEMORY_EVICTOR_SAMPLE_SIZE: usize = 3;
+pub const MAX_MEMORY_SAMPLE_SIZE: usize = 3;
 
 #[derive(Debug)]
 pub struct KeyspaceManager {
@@ -31,6 +31,7 @@ pub struct Db {
     notifier: Notify,
     evictor: Evictor,
     server_max_memory: u64,
+    max_memory_sample_size: usize,
 }
 
 #[derive(Debug)]
@@ -66,11 +67,11 @@ impl KeyspaceManager {
         Err(anyhow!("ERR keyspace '{}' does not exist", keyspace))
     }
 
-    pub fn create(&self, name: String, evictor: Evictor) -> u8 {
+    pub fn create(&self, name: String, evictor: Evictor, max_memory_sample_size: usize) -> u8 {
         if self.keyspaces.contains_key(&name) {
             return 0;
         }
-        let keyspace = Keyspace::new(evictor, self.server_max_memory);
+        let keyspace = Keyspace::new(evictor, self.server_max_memory, max_memory_sample_size);
         keyspace.start_evictor();
         self.keyspaces.insert(name, keyspace);
         1
@@ -78,9 +79,9 @@ impl KeyspaceManager {
 }
 
 impl Keyspace {
-    pub fn new(evictor: Evictor, server_max_memory: u64) -> Self {
+    pub fn new(evictor: Evictor, server_max_memory: u64, max_memory_sample_size: usize) -> Self {
         Keyspace {
-            db: Arc::new(Db::new(evictor, server_max_memory)),
+            db: Arc::new(Db::new(evictor, server_max_memory, max_memory_sample_size)),
         }
     }
 
@@ -127,13 +128,14 @@ impl Value {
 }
 
 impl Db {
-    pub fn new(evictor: Evictor, server_max_memory: u64) -> Self {
+    pub fn new(evictor: Evictor, server_max_memory: u64, max_memory_sample_size: usize) -> Self {
         Db {
             store: Mutex::new(HashMap::new()),
             shutdown: Mutex::new(false),
             notifier: Notify::new(),
             evictor,
             server_max_memory,
+            max_memory_sample_size,
         }
     }
 
@@ -191,7 +193,7 @@ fn sample_and_evict(db: Arc<Db>) {
             access_time = entry.1.last_accessed;
             key_to_delete = Some(entry.0.clone());
         }
-        if (samples + 1) == std::cmp::min(MAX_MEMORY_EVICTOR_SAMPLE_SIZE, handle.len()) {
+        if (samples + 1) == std::cmp::min(db.max_memory_sample_size, handle.len()) {
             if let Some(key) = key_to_delete {
                 handle.remove(&key);
             }
@@ -204,7 +206,7 @@ fn get_rss() -> u64 {
     let mut rss = pid_rusage::pidrusage::<pid_rusage::RUsageInfoV2>(process::id() as i32)
         .map_or(0, |r| r.ri_resident_size);
     if rss > 0 && cfg!(target_os = "linux") {
-        rss *= 1024
+        rss /= 1024
     }
     rss
 }
