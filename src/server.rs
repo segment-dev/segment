@@ -1,5 +1,4 @@
 use super::command;
-use super::config::Config;
 use super::connection::Connection;
 use super::frame;
 use super::keyspace;
@@ -15,8 +14,8 @@ use tokio::sync::{broadcast, mpsc};
 /// We are using mpsc::Sender and mpsc::Receiver to wait for all the connections to be closed
 pub struct Server {
     listener: TcpListener,
+    _max_memory: u64,
     keyspace_manager: Arc<keyspace::KeyspaceManager>,
-    _config: Config,
     shutdown_notifier: broadcast::Sender<()>,
     shutdown_complete_tx: mpsc::Sender<()>,
     shutdown_complete_rx: mpsc::Receiver<()>,
@@ -29,9 +28,8 @@ pub struct ConnectionHandler {
     _shutdown_complete_tx: mpsc::Sender<()>,
 }
 
-pub async fn start(config: Config) -> Result<()> {
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", config.port())).await?;
-    let server = Server::new(config, listener)?;
+pub async fn start(listener: TcpListener, max_memory: u64) -> Result<()> {
+    let server = Server::new(listener, max_memory)?;
     tokio::select! {
         result = server.start() => {
             match result {
@@ -71,18 +69,18 @@ pub async fn start(config: Config) -> Result<()> {
 }
 
 impl Server {
-    pub fn new(config: Config, listener: TcpListener) -> Result<Self> {
+    pub fn new(listener: TcpListener, max_memory: u64) -> Result<Self> {
         let (shutdown_notifier, _) = broadcast::channel(1);
         let (shutdown_complete_tx, shutdown_complete_rx) = mpsc::channel(1);
-        let keyspace_manager = Arc::new(keyspace::KeyspaceManager::new(config.max_memory()));
+        let keyspace_manager = Arc::new(keyspace::KeyspaceManager::new(max_memory));
         info!("Server initialized");
         Ok(Server {
-            _config: config,
             shutdown_notifier,
             listener,
             shutdown_complete_rx,
             shutdown_complete_tx,
             keyspace_manager,
+            _max_memory: max_memory,
         })
     }
 
@@ -155,7 +153,7 @@ impl ConnectionHandler {
                     continue;
                 }
             };
-            command::exec(command, self).await;
+            command::exec(command, self).await?;
         }
 
         Ok(())

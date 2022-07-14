@@ -1,3 +1,4 @@
+use anyhow::Result;
 use clap::Parser;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
@@ -5,11 +6,10 @@ use segment::connection;
 use segment::frame;
 use tokio::net::TcpStream;
 
-/// A simple CLI to interact with the Segment server
 #[derive(Debug, Parser)]
 struct Args {
     /// Specify the server port
-    #[clap(long, default_value_t = 7890)]
+    #[clap(long, default_value_t = 9890)]
     port: u16,
 
     /// Specify the server host
@@ -18,11 +18,9 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let args = Args::parse();
-    let stream = TcpStream::connect(format!("{}:{}", args.host, args.port))
-        .await
-        .unwrap();
+    let stream = TcpStream::connect(format!("{}:{}", args.host, args.port)).await?;
     let mut connection = connection::Connection::new(stream);
     let mut rl = Editor::<()>::new();
     loop {
@@ -62,6 +60,8 @@ async fn main() {
             }
         }
     }
+
+    Ok(())
 }
 
 fn tokenize_command(cmd: &str) -> Vec<frame::Frame> {

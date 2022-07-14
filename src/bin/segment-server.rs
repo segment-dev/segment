@@ -1,23 +1,19 @@
 use anyhow::Result;
 use clap::Parser;
 use fern::Dispatch;
-use segment::config;
+use log::info;
 use segment::server;
+use tokio::net::TcpListener;
 
-/// An in-memory key-value database with dynamic keyspaces
 #[derive(Debug, Parser)]
 struct Args {
     /// Specify the server port
-    #[clap(long)]
-    port: Option<u16>,
-
-    /// Specify the config file path
-    #[clap(long)]
-    config: Option<String>,
+    #[clap(long, default_value_t = 9890)]
+    port: u16,
 
     /// Specify the max memory limit in megabytes
-    #[clap(long)]
-    max_memory: Option<u64>,
+    #[clap(long, default_value_t = 1024)]
+    max_memory: u64,
 
     /// Start the server in debug mode
     #[clap(long)]
@@ -28,9 +24,9 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
     setup_logger(args.debug)?;
-    let config = config::resolve(args.port, args.max_memory, args.config)?;
-    server::start(config).await?;
-
+    info!("Starting server on 127.0.0.1:{}", args.port);
+    let listener = TcpListener::bind(format!("127.0.0.1:{}", args.port)).await?;
+    server::start(listener, args.max_memory).await?;
     Ok(())
 }
 
