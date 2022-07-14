@@ -127,11 +127,10 @@ impl std::fmt::Display for Frame {
                     writeln!(f, "{}) {}", i, value)?
                 }
             }
-            Frame::Blob(v) => write!(
-                f,
-                "(blob) {}",
-                str::from_utf8(&v[..]).map(|v| v.to_string()).unwrap()
-            )?,
+            Frame::Blob(v) => match str::from_utf8(&v[..]) {
+                Ok(v) => write!(f, "(blob) {}", v)?,
+                Err(e) => write!(f, "(error) {}", e)?,
+            },
             Frame::Error(v) => write!(f, "(error) {}", v)?,
             Frame::Integer(v) => write!(f, "(integer) {}", v)?,
             Frame::Null => write!(f, "(null)")?,
