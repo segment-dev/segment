@@ -11,7 +11,7 @@ pub struct Parser {
     iterator: iter::Peekable<vec::IntoIter<frame::Frame>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Command {
     Get(Get),
     Set(Set),
@@ -19,26 +19,26 @@ pub enum Command {
     Create(Create),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Get {
     key: String,
     keyspace: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Set {
     key: String,
     value: Bytes,
     keyspace: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Del {
     key: String,
     keyspace: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Create {
     keyspace: String,
     evictor: Evictor,
@@ -324,7 +324,7 @@ pub fn new(frame: frame::Frame) -> Result<Command> {
         }
     }
 
-    return Err(anyhow!(""));
+    return Err(anyhow!("ERRPARSE No command was provided to be executed"));
 }
 
 pub async fn exec(cmd: Command, connection: &mut ConnectionHandler) -> Result<()> {
@@ -333,5 +333,233 @@ pub async fn exec(cmd: Command, connection: &mut ConnectionHandler) -> Result<()
         Command::Set(cmd) => cmd.exec(connection).await,
         Command::Del(cmd) => cmd.exec(connection).await,
         Command::Get(cmd) => cmd.exec(connection).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn get_cursor(data: &[u8]) -> Cursor<&[u8]> {
+        Cursor::new(data)
+    }
+
+    fn get_frame(data: &[u8]) -> frame::Frame {
+        let mut cursor = get_cursor(data);
+        frame::parse(&mut cursor).unwrap()
+    }
+
+    #[test]
+    fn new_non_array_frame_error() {
+        let frame = get_frame(b"$create\r\n");
+        assert!(new(frame).is_err())
+    }
+
+    #[test]
+    fn new_empty_array_frame_error() {
+        let frame = get_frame(b"#0\r\n");
+        assert!(new(frame).is_err())
+    }
+
+    #[test]
+    fn new_unknow_command_error() {
+        let frame = get_frame(b"#1\r\n$foo\r\n");
+        assert!(new(frame).is_err())
+    }
+
+    #[test]
+    fn new_create_without_keyspace_error() {
+        assert!(new(get_frame(b"#1\r\n$create\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_create_with_keyspace_no_error() {
+        assert_eq!(
+            new(get_frame(b"#2\r\n$create\r\n$foo\r\n")).unwrap(),
+            Command::Create(Create {
+                keyspace: String::from("foo"),
+                evictor: Evictor::Noop,
+                max_memory_sample_size: None
+            })
+        )
+    }
+
+    #[test]
+    fn new_create_noop_evictor_implicit_with_sample_size_error() {
+        assert!(new(get_frame(b"#4\r\n$create\r\n$foo\r\n$ss\r\n$100\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_create_noop_evictor_explicit_with_sample_size_error() {
+        assert!(new(get_frame(
+            b"#6\r\n$create\r\n$foo\r\n$ss\r\n$100\r\n$ev\r\n$noop\r\n"
+        ))
+        .is_err())
+    }
+
+    #[test]
+    fn new_create_lru_evictor_with_sample_size_no_error() {
+        assert_eq!(
+            new(get_frame(
+                b"#6\r\n$create\r\n$foo\r\n$ss\r\n$100\r\n$ev\r\n$lru\r\n"
+            ))
+            .unwrap(),
+            Command::Create(Create {
+                keyspace: String::from("foo"),
+                evictor: Evictor::Lru,
+                max_memory_sample_size: Some(100)
+            })
+        )
+    }
+
+    #[test]
+    fn new_create_lru_evictor_without_sample_size_no_error() {
+        assert_eq!(
+            new(get_frame(b"#4\r\n$create\r\n$foo\r\n$ev\r\n$lru\r\n")).unwrap(),
+            Command::Create(Create {
+                keyspace: String::from("foo"),
+                evictor: Evictor::Lru,
+                max_memory_sample_size: Some(MAX_MEMORY_SAMPLE_SIZE)
+            })
+        )
+    }
+
+    #[test]
+    fn new_create_random_evictor_with_sample_size_no_error() {
+        assert_eq!(
+            new(get_frame(
+                b"#6\r\n$create\r\n$foo\r\n$ss\r\n$100\r\n$ev\r\n$random\r\n"
+            ))
+            .unwrap(),
+            Command::Create(Create {
+                keyspace: String::from("foo"),
+                evictor: Evictor::Random,
+                max_memory_sample_size: Some(100)
+            })
+        )
+    }
+
+    #[test]
+    fn new_create_random_evictor_without_sample_size_no_error() {
+        assert_eq!(
+            new(get_frame(b"#4\r\n$create\r\n$foo\r\n$ev\r\n$random\r\n")).unwrap(),
+            Command::Create(Create {
+                keyspace: String::from("foo"),
+                evictor: Evictor::Random,
+                max_memory_sample_size: Some(MAX_MEMORY_SAMPLE_SIZE)
+            })
+        )
+    }
+
+    #[test]
+    fn new_create_invlaid_sample_size_error() {
+        assert!(new(get_frame(
+            b"#6\r\n$create\r\n$foo\r\n$ss\r\n$abc\r\n$ev\r\n$random\r\n"
+        ))
+        .is_err())
+    }
+
+    #[test]
+    fn new_create_negative_sample_size_error() {
+        assert!(new(get_frame(
+            b"#6\r\n$create\r\n$foo\r\n$ss\r\n$-10000\r\n$ev\r\n$random\r\n"
+        ))
+        .is_err())
+    }
+
+    #[test]
+    fn new_create_extra_args_error() {
+        assert!(new(get_frame(
+            b"#8\r\n$create\r\n$foo\r\n$ss\r\n$100\r\n$ev\r\n$random\r\n$foo\r\n$bar\r\n"
+        ))
+        .is_err())
+    }
+
+    #[test]
+    fn new_set_without_keyspace_error() {
+        assert!(new(get_frame(b"#1\r\n$set\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_set_without_key_error() {
+        assert!(new(get_frame(b"#2\r\n$set\r\n$keyspace\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_set_without_value_error() {
+        assert!(new(get_frame(b"#3\r\n$set\r\n$keyspace\r\n$foo\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_set_no_error() {
+        assert_eq!(
+            new(get_frame(b"#4\r\n$set\r\n$keyspace\r\n$foo\r\n$bar\r\n")).unwrap(),
+            Command::Set(Set {
+                keyspace: String::from("keyspace"),
+                key: String::from("foo"),
+                value: Bytes::from("bar")
+            })
+        )
+    }
+
+    #[test]
+    fn new_set_extra_args_error() {
+        assert!(new(get_frame(
+            b"#5\r\n$set\r\n$keyspace\r\n$foo\r\n$bar\r\n$random\r\n"
+        ))
+        .is_err())
+    }
+
+    #[test]
+    fn new_get_without_keyspace_error() {
+        assert!(new(get_frame(b"#1\r\n$get\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_get_without_key_error() {
+        assert!(new(get_frame(b"#2\r\n$get\r\n$keyspace\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_get_no_error() {
+        assert_eq!(
+            new(get_frame(b"#3\r\n$get\r\n$keyspace\r\n$foo\r\n")).unwrap(),
+            Command::Get(Get {
+                keyspace: String::from("keyspace"),
+                key: String::from("foo")
+            })
+        )
+    }
+
+    #[test]
+    fn new_get_extra_args_error() {
+        assert!(new(get_frame(b"#4\r\n$get\r\n$keyspace\r\n$foo\r\n$bar\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_del_without_keyspace_error() {
+        assert!(new(get_frame(b"#1\r\n$del\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_del_without_key_error() {
+        assert!(new(get_frame(b"#2\r\n$del\r\n$keyspace\r\n")).is_err())
+    }
+
+    #[test]
+    fn new_del_no_error() {
+        assert_eq!(
+            new(get_frame(b"#3\r\n$del\r\n$keyspace\r\n$foo\r\n")).unwrap(),
+            Command::Del(Del {
+                keyspace: String::from("keyspace"),
+                key: String::from("foo")
+            })
+        )
+    }
+
+    #[test]
+    fn new_del_extra_args_error() {
+        assert!(new(get_frame(b"#4\r\n$del\r\n$keyspace\r\n$foo\r\n$bar\r\n")).is_err())
     }
 }
