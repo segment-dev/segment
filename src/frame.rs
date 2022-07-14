@@ -17,10 +17,10 @@ pub enum Frame {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum ParseError {
-    #[error("incomplete frame")]
+    #[error("ERRPROTOCOL Incomplete frame, make sure that the frame is CRLF terminated")]
     IncompleteFrame,
 
-    #[error("invalid frame")]
+    #[error("ERRPROTOCOL Invalid frame")]
     InvalidFrame,
 }
 

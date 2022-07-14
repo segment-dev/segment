@@ -1,6 +1,6 @@
-use super::frame;
+use crate::frame;
 use anyhow::{anyhow, Result};
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use std::io::Cursor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -112,6 +112,47 @@ impl Connection {
 
             _ => unreachable!(),
         }
+
+        Ok(())
+    }
+
+    pub async fn write_string(&mut self, data: &str) -> Result<()> {
+        self.stream.write_u8(b'$').await?;
+        self.stream.write_all(data.as_bytes()).await?;
+        self.stream.write_all(b"\r\n").await?;
+
+        Ok(())
+    }
+
+    pub async fn write_integer(&mut self, data: i64) -> Result<()> {
+        self.stream.write_u8(b'%').await?;
+        self.stream.write_all(data.to_string().as_bytes()).await?;
+        self.stream.write_all(b"\r\n").await?;
+
+        Ok(())
+    }
+
+    pub async fn write_error(&mut self, data: &str) -> Result<()> {
+        self.stream.write_u8(b'!').await?;
+        self.stream.write_all(data.as_bytes()).await?;
+        self.stream.write_all(b"\r\n").await?;
+
+        Ok(())
+    }
+
+    pub async fn write_null(&mut self) -> Result<()> {
+        self.stream.write_all(b"*-1\r\n\r\n").await?;
+        Ok(())
+    }
+
+    pub async fn write_blob(&mut self, data: &Bytes) -> Result<()> {
+        self.stream.write_u8(b'*').await?;
+        self.stream
+            .write_all(data.len().to_string().as_bytes())
+            .await?;
+        self.stream.write_all(b"\r\n").await?;
+        self.stream.write_all(data).await?;
+        self.stream.write_all(b"\r\n").await?;
 
         Ok(())
     }

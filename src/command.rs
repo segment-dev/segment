@@ -1,6 +1,6 @@
-use super::frame;
-use super::keyspace::{Evictor, MAX_MEMORY_SAMPLE_SIZE};
-use super::server::ConnectionHandler;
+use crate::frame;
+use crate::keyspace::{Evictor, MAX_MEMORY_SAMPLE_SIZE};
+use crate::server::ConnectionHandler;
 use anyhow::{anyhow, Result};
 use atoi::atoi;
 use bytes::Bytes;
@@ -129,18 +129,15 @@ impl Get {
         {
             Ok(response) => {
                 if let Some(value) = response {
-                    connection
-                        .connection
-                        .write_frame(frame::Frame::Blob(value))
-                        .await
+                    connection.connection.write_blob(&value).await
                 } else {
-                    connection.connection.write_frame(frame::Frame::Null).await
+                    connection.connection.write_null().await
                 }
             }
             Err(e) => {
                 connection
                     .connection
-                    .write_frame(frame::Frame::Error(e.to_string()))
+                    .write_error(&format!("ERREXEC {}", e))
                     .await
             }
         }
@@ -170,16 +167,11 @@ impl Del {
             .keyspace_manager
             .with_keyspace(&self.keyspace, |keyspace| Ok(keyspace.del(&self.key)))
         {
-            Ok(response) => {
-                connection
-                    .connection
-                    .write_frame(frame::Frame::Integer(response as i64))
-                    .await
-            }
+            Ok(response) => connection.connection.write_integer(response as i64).await,
             Err(e) => {
                 connection
                     .connection
-                    .write_frame(frame::Frame::Error(e.to_string()))
+                    .write_error(&format!("ERREXEC {}", e))
                     .await
             }
         }
@@ -219,16 +211,11 @@ impl Set {
             .with_keyspace(&self.keyspace, |keyspace| {
                 Ok(keyspace.set(self.key, self.value))
             }) {
-            Ok(response) => {
-                connection
-                    .connection
-                    .write_frame(frame::Frame::Integer(response as i64))
-                    .await
-            }
+            Ok(response) => connection.connection.write_integer(response as i64).await,
             Err(e) => {
                 connection
                     .connection
-                    .write_frame(frame::Frame::Error(e.to_string()))
+                    .write_error(&format!("ERREXEC {}", e))
                     .await
             }
         }
@@ -319,10 +306,7 @@ impl Create {
             connection
                 .keyspace_manager
                 .create(self.keyspace, self.evictor, max_memory_sample_size);
-        connection
-            .connection
-            .write_frame(frame::Frame::Integer(response as i64))
-            .await
+        connection.connection.write_integer(response as i64).await
     }
 }
 

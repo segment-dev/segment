@@ -1,7 +1,6 @@
-use super::command;
-use super::connection::Connection;
-use super::frame;
-use super::keyspace;
+use crate::command;
+use crate::connection::Connection;
+use crate::keyspace;
 use crate::shutdown::ShutdownListener;
 use anyhow::Result;
 use log::{error, info};
@@ -132,9 +131,7 @@ impl ConnectionHandler {
             let frame = match result {
                 Ok(frame) => frame,
                 Err(e) => {
-                    self.connection
-                        .write_frame(frame::Frame::Error(e.to_string()))
-                        .await?;
+                    self.connection.write_error(&e.to_string()).await?;
                     continue;
                 }
             };
@@ -147,9 +144,7 @@ impl ConnectionHandler {
             let command = match command::new(frame) {
                 Ok(cmd) => cmd,
                 Err(e) => {
-                    self.connection
-                        .write_frame(frame::Frame::Error(e.to_string()))
-                        .await?;
+                    self.connection.write_error(&e.to_string()).await?;
                     continue;
                 }
             };
