@@ -193,4 +193,222 @@ mod tests {
         skip(0, &mut cursor).unwrap();
         assert_eq!(cursor.remaining(), 5)
     }
+
+    #[test]
+    fn parse_unknown_type() {
+        let mut cursor = get_cursor(b"(this is a frame with unknown type\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_empty_invalid_frame() {
+        let mut cursor = get_cursor(b"");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_string_no_error() {
+        let mut cursor = get_cursor(b"$this is a random string\r\n");
+        assert_eq!(
+            parse(&mut cursor),
+            Ok(Frame::String("this is a random string".to_string()))
+        )
+    }
+
+    #[test]
+    fn parse_empty_string_no_error() {
+        let mut cursor = get_cursor(b"$\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::String("".to_string())))
+    }
+
+    #[test]
+    fn parse_string_incomplete_frame() {
+        let mut cursor = get_cursor(b"$this is a random string\r");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_positive_integer_no_error() {
+        let mut cursor = get_cursor(b"%1000\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Integer(1000)))
+    }
+
+    #[test]
+    fn parse_negative_integer_no_error() {
+        let mut cursor = get_cursor(b"%-1000\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Integer(-1000)))
+    }
+
+    #[test]
+    fn parse_zero_no_error() {
+        let mut cursor = get_cursor(b"%0\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Integer(0)))
+    }
+
+    #[test]
+    fn parse_multiple_zeroes_no_error() {
+        let mut cursor = get_cursor(b"%00000000\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Integer(0)))
+    }
+
+    #[test]
+    fn parse_float_no_error() {
+        let mut cursor = get_cursor(b"%10000.12000\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Integer(10000)))
+    }
+
+    #[test]
+    fn parse_empty_frame_invalid_frame() {
+        let mut cursor = get_cursor(b"%\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_invalid_integer_invalid_frame() {
+        let mut cursor = get_cursor(b"%abc\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_integer_incomplete_frame() {
+        let mut cursor = get_cursor(b"%100\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_error_no_error() {
+        let mut cursor = get_cursor(b"!this is an error frame\r\n");
+        assert_eq!(
+            parse(&mut cursor),
+            Ok(Frame::Error("this is an error frame".to_string()))
+        )
+    }
+
+    #[test]
+    fn parse_empty_error_no_error() {
+        let mut cursor = get_cursor(b"!\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Error("".to_string())))
+    }
+
+    #[test]
+    fn parse_error_incomplete_frame() {
+        let mut cursor = get_cursor(b"!this is a random error\r");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_null_no_error() {
+        let mut cursor = get_cursor(b"*-1\r\n\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Null))
+    }
+
+    #[test]
+    fn parse_null_with_data_no_error() {
+        let mut cursor = get_cursor(b"*-1\r\nhello world\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Null))
+    }
+
+    #[test]
+    fn parse_null_invalid_frame() {
+        let mut cursor = get_cursor(b"*-1\n\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_null_incomplete_frame() {
+        let mut cursor = get_cursor(b"*-1\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_blob_no_error() {
+        let mut cursor = get_cursor(b"*7\r\nsegment\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Blob(Bytes::from("segment"))))
+    }
+
+    #[test]
+    fn parse_blob_with_delimiters_no_error() {
+        let mut cursor = get_cursor(b"*9\r\nseg\r\nment\r\n");
+        assert_eq!(
+            parse(&mut cursor),
+            Ok(Frame::Blob(Bytes::from("seg\r\nment")))
+        )
+    }
+
+    #[test]
+    fn parse_empty_blob_no_error() {
+        let mut cursor = get_cursor(b"*0\r\n\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Blob(Bytes::from(""))))
+    }
+
+    #[test]
+    fn parse_blob_length_less_than_data_no_error() {
+        let mut cursor = get_cursor(b"*7\r\nseg\r\nment\r\n");
+        assert_eq!(
+            parse(&mut cursor),
+            Ok(Frame::Blob(Bytes::from("seg\r\nme")))
+        )
+    }
+
+    #[test]
+    fn parse_blob_length_greater_than_data_incomplete_frame() {
+        let mut cursor = get_cursor(b"*10\r\nseg\r\nment\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_blob_invalid_length_invalid_frame() {
+        let mut cursor = get_cursor(b"*abc\r\nseg\r\nment\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_blob_negative_length_invalid_frame() {
+        let mut cursor = get_cursor(b"*-1000\r\nseg\r\nment\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_array_no_error() {
+        let mut cursor = get_cursor(b"#1\r\n$foo\r\n");
+        assert_eq!(
+            parse(&mut cursor),
+            Ok(Frame::Array(vec![Frame::String("foo".to_string())]))
+        )
+    }
+    #[test]
+    fn parse_empty_array_no_error() {
+        let mut cursor = get_cursor(b"#0\r\n");
+        assert_eq!(parse(&mut cursor), Ok(Frame::Array(vec![])))
+    }
+
+    #[test]
+    fn parse_array_incomplete_frame() {
+        let mut cursor = get_cursor(b"#0\r");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_array_child_incomplete_incomplete_frame() {
+        let mut cursor = get_cursor(b"#1\r\n$sachin\r");
+        assert_eq!(parse(&mut cursor), Err(ParseError::IncompleteFrame))
+    }
+
+    #[test]
+    fn parse_array_nested_array_invalid_frame() {
+        let mut cursor = get_cursor(b"#1\r\n#0\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_array_invalid_length_invalid_frame() {
+        let mut cursor = get_cursor(b"#abc\r\n$foo\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
+
+    #[test]
+    fn parse_array_negative_length_invalid_frame() {
+        let mut cursor = get_cursor(b"#-1\r\n$foo\r\n");
+        assert_eq!(parse(&mut cursor), Err(ParseError::InvalidFrame))
+    }
 }
