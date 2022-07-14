@@ -122,7 +122,7 @@ impl Get {
         ));
     }
 
-    pub async fn exec(&self, connection: &mut ConnectionHandler) {
+    pub async fn exec(&self, connection: &mut ConnectionHandler) -> Result<()> {
         match connection
             .keyspace_manager
             .with_keyspace(&self.keyspace, |keyspace| Ok(keyspace.get(&self.key)))
@@ -133,20 +133,16 @@ impl Get {
                         .connection
                         .write_frame(frame::Frame::Blob(value))
                         .await
-                        .unwrap()
                 } else {
-                    connection
-                        .connection
-                        .write_frame(frame::Frame::Null)
-                        .await
-                        .unwrap()
+                    connection.connection.write_frame(frame::Frame::Null).await
                 }
             }
-            Err(e) => connection
-                .connection
-                .write_frame(frame::Frame::Error(e.to_string()))
-                .await
-                .unwrap(),
+            Err(e) => {
+                connection
+                    .connection
+                    .write_frame(frame::Frame::Error(e.to_string()))
+                    .await
+            }
         }
     }
 }
@@ -169,21 +165,23 @@ impl Del {
         ));
     }
 
-    pub async fn exec(&self, connection: &mut ConnectionHandler) {
+    pub async fn exec(&self, connection: &mut ConnectionHandler) -> Result<()> {
         match connection
             .keyspace_manager
             .with_keyspace(&self.keyspace, |keyspace| Ok(keyspace.del(&self.key)))
         {
-            Ok(response) => connection
-                .connection
-                .write_frame(frame::Frame::Integer(response as i64))
-                .await
-                .unwrap(),
-            Err(e) => connection
-                .connection
-                .write_frame(frame::Frame::Error(e.to_string()))
-                .await
-                .unwrap(),
+            Ok(response) => {
+                connection
+                    .connection
+                    .write_frame(frame::Frame::Integer(response as i64))
+                    .await
+            }
+            Err(e) => {
+                connection
+                    .connection
+                    .write_frame(frame::Frame::Error(e.to_string()))
+                    .await
+            }
         }
     }
 }
@@ -215,22 +213,24 @@ impl Set {
         ));
     }
 
-    pub async fn exec(self, connection: &mut ConnectionHandler) {
+    pub async fn exec(self, connection: &mut ConnectionHandler) -> Result<()> {
         match connection
             .keyspace_manager
             .with_keyspace(&self.keyspace, |keyspace| {
                 Ok(keyspace.set(self.key, self.value))
             }) {
-            Ok(response) => connection
-                .connection
-                .write_frame(frame::Frame::Integer(response as i64))
-                .await
-                .unwrap(),
-            Err(e) => connection
-                .connection
-                .write_frame(frame::Frame::Error(e.to_string()))
-                .await
-                .unwrap(),
+            Ok(response) => {
+                connection
+                    .connection
+                    .write_frame(frame::Frame::Integer(response as i64))
+                    .await
+            }
+            Err(e) => {
+                connection
+                    .connection
+                    .write_frame(frame::Frame::Error(e.to_string()))
+                    .await
+            }
         }
     }
 }
@@ -310,7 +310,7 @@ impl Create {
         ))
     }
 
-    pub async fn exec(self, connection: &mut ConnectionHandler) {
+    pub async fn exec(self, connection: &mut ConnectionHandler) -> Result<()> {
         let mut max_memory_sample_size = 0;
         if let Some(sample_size) = self.max_memory_sample_size {
             max_memory_sample_size = sample_size
@@ -323,7 +323,6 @@ impl Create {
             .connection
             .write_frame(frame::Frame::Integer(response as i64))
             .await
-            .unwrap();
     }
 }
 
@@ -344,7 +343,7 @@ pub fn new(frame: frame::Frame) -> Result<Command> {
     return Err(anyhow!(""));
 }
 
-pub async fn exec(cmd: Command, connection: &mut ConnectionHandler) {
+pub async fn exec(cmd: Command, connection: &mut ConnectionHandler) -> Result<()> {
     match cmd {
         Command::Create(cmd) => cmd.exec(connection).await,
         Command::Set(cmd) => cmd.exec(connection).await,
